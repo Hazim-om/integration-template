@@ -17,6 +17,7 @@ mod simulations {
     use rstest::rstest;
 
     use solana_account::Account;
+    use solana_account::ReadableAccount;
     use solana_account::WritableAccount;
     use solana_client::nonblocking::rpc_client::RpcClient;
     use solana_compute_budget::compute_budget::ComputeBudget;
@@ -60,7 +61,10 @@ mod simulations {
         let mut litesvm = LiteSVM::new().with_compute_budget(ComputeBudget {
             compute_unit_limit: 1_400_000,
             ..Default::default()
-        });
+        })
+        .with_blockhash_check(false)
+        .with_sigverify(false)
+        .with_transaction_history(0);
 
         // These two programs appear to be dependencies required by Raydium
         // CLMM math or helper operations.
@@ -186,13 +190,13 @@ mod simulations {
             blockhash,
         );
 
-        litesvm.send_transaction(tx).unwrap();
+        let simulation_result = litesvm.simulate_transaction(tx).unwrap();
 
         //
         // Read output account and extract the final token amount
         //
-        let account_b = litesvm.get_account(&token_account_b).unwrap();
-        let post_b = TokenAccount::unpack_from_slice(&account_b.data)
+        let account_b = simulation_result.post_accounts.into_iter().find(|(pk, _)| pk == &token_account_b).map(|(_, acc)| acc).unwrap();
+        let post_b = TokenAccount::unpack_from_slice(account_b.data())
             .expect("Failed to unpack token B account");
         post_b.amount
     }
