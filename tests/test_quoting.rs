@@ -61,7 +61,10 @@ mod simulations {
         let mut litesvm = LiteSVM::new().with_compute_budget(ComputeBudget {
             compute_unit_limit: 1_400_000,
             ..Default::default()
-        });
+        })
+        .with_blockhash_check(false)
+        .with_sigverify(false)
+        .with_transaction_history(0);
 
         // These two programs appear to be dependencies required by Raydium
         // CLMM math or helper operations.
