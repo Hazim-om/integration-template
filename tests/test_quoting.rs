@@ -1,3 +1,5 @@
+mod common;
+
 #[cfg(test)]
 mod simulations {
     //! Quoting tests for Titan-compatible AMM venues.
@@ -34,13 +36,15 @@ mod simulations {
     use spl_associated_token_account::get_associated_token_address_with_program_id;
     use spl_token::state::{Account as TokenAccount, AccountState};
 
-    use std::env;
+    use crate::common::solana_rpc_url;
 
     use titan_integration_template::example::RAYDIUM_AMM_PROGRAM_ID;
     use titan_integration_template::trading_venue::SwapType;
 
     use titan_integration_template::{
-        account_caching::AccountsCache, example::RaydiumAmmVenue, trading_venue::QuoteRequest,
+        account_caching::AccountsCache,
+        example::{OmnipairVenue, RaydiumAmmVenue},
+        trading_venue::QuoteRequest,
     };
     use titan_integration_template::{
         account_caching::rpc_cache::RpcClientCache,
@@ -229,8 +233,7 @@ mod simulations {
         init_test_logger();
 
         // Fetch live pool data from RPC
-        let rpc_url = env::var("SOLANA_RPC_URL").unwrap();
-        let rpc = RpcClient::new(rpc_url);
+        let rpc = RpcClient::new(solana_rpc_url());
         let venue_account = rpc.get_account(&amm_key).await.unwrap();
 
         // Build venue + load pool state
@@ -307,8 +310,7 @@ mod simulations {
         init_test_logger();
 
         // Fetch venue state from RPC
-        let rpc_url = env::var("SOLANA_RPC_URL").unwrap();
-        let rpc = RpcClient::new(rpc_url);
+        let rpc = RpcClient::new(solana_rpc_url());
         let venue_account = rpc.get_account(&amm_key).await.unwrap();
 
         let cache = RpcClientCache::new(rpc);
@@ -383,9 +385,7 @@ mod simulations {
         //
         let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
 
-        let rpc_url =
-            env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
-        let rpc = RpcClient::new(rpc_url);
+        let rpc = RpcClient::new(solana_rpc_url());
 
         //
         // Fetch the venue’s account and construct the venue
@@ -472,9 +472,7 @@ mod simulations {
         //
         let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
 
-        let rpc_url =
-            env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
-        let rpc = RpcClient::new(rpc_url);
+        let rpc = RpcClient::new(solana_rpc_url());
 
         //
         // Fetch the venue’s account and construct the venue
@@ -541,6 +539,137 @@ mod simulations {
             assert!(
                 avg_time < 0.0001,
                 "Failed quoting speed test swapping ({}) -> ({})",
+                input_mint,
+                output_mint
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: Omnipair AMM Monotonicity
+    // -------------------------------------------------------------------------
+
+    #[rstest]
+    #[tokio::test]
+    #[case("Cp2nGCWWfqkUmPR3pPKoR376Fti8wuYRFrSWJZq1a9SA")] // Omnipair pair
+    async fn test_omnipair_monotone(#[case] pair_key: String) {
+        init_test_logger();
+
+        let pair_key = Pubkey::from_str(&pair_key).expect("Invalid test pubkey");
+        let rpc = RpcClient::new(solana_rpc_url());
+
+        let pair_account = rpc
+            .get_account(&pair_key)
+            .await
+            .expect("Failed to fetch Omnipair pair account");
+
+        let mut venue = OmnipairVenue::from_account(&pair_key, &pair_account)
+            .expect("Failed to construct OmnipairVenue");
+
+        let cache = RpcClientCache::new(rpc);
+        venue
+            .update_state(&cache)
+            .await
+            .expect("OmnipairVenue state update failed");
+
+        let token_info = venue.get_token_info();
+        assert_eq!(token_info.len(), 2);
+
+        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
+            let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
+            let mut test_amounts = Vec::with_capacity(50);
+
+            for _ in 0..50 {
+                test_amounts.push(sample_log_uniform_u64(lb, ub));
+            }
+            test_amounts.sort();
+
+            let mut prev = 0;
+            for amount in test_amounts {
+                let input_mint = token_info[in_idx as usize].pubkey;
+                let output_mint = token_info[out_idx as usize].pubkey;
+
+                let result = venue
+                    .quote(QuoteRequest {
+                        input_mint,
+                        output_mint,
+                        amount,
+                        swap_type: SwapType::ExactIn,
+                    })
+                    .expect("Omnipair quote failed");
+
+                assert!(
+                    prev <= result.expected_output,
+                    "Omnipair swap not monotone (prev: {}) > (output: {})",
+                    prev,
+                    result.expected_output
+                );
+
+                prev = result.expected_output;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 6: Omnipair quoting speed
+    // -------------------------------------------------------------------------
+
+    #[rstest]
+    #[tokio::test]
+    #[case("Cp2nGCWWfqkUmPR3pPKoR376Fti8wuYRFrSWJZq1a9SA", 10_000)] // Omnipair pair
+    async fn test_omnipair_quoting_speed(#[case] pair_key: String, #[case] iterations: usize) {
+        init_test_logger();
+
+        let pair_key = Pubkey::from_str(&pair_key).expect("Invalid test pubkey");
+        let rpc = RpcClient::new(solana_rpc_url());
+
+        let pair_account = rpc
+            .get_account(&pair_key)
+            .await
+            .expect("Failed to fetch Omnipair pair account");
+
+        let mut venue = OmnipairVenue::from_account(&pair_key, &pair_account)
+            .expect("Failed to construct OmnipairVenue");
+
+        let cache = RpcClientCache::new(rpc);
+        venue
+            .update_state(&cache)
+            .await
+            .expect("OmnipairVenue state update failed");
+
+        let token_info = venue.get_token_info();
+        assert_eq!(token_info.len(), 2);
+
+        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
+            let input_mint = token_info[in_idx as usize].pubkey;
+            let output_mint = token_info[out_idx as usize].pubkey;
+
+            let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
+            let mut test_amounts = Vec::with_capacity(iterations);
+
+            for _ in 0..iterations {
+                test_amounts.push(sample_log_uniform_u64(lb, ub));
+            }
+
+            let start = Instant::now();
+            for amount in test_amounts {
+                let _result = venue
+                    .quote(QuoteRequest {
+                        input_mint,
+                        output_mint,
+                        amount,
+                        swap_type: SwapType::ExactIn,
+                    })
+                    .expect("Omnipair quote failed");
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+            let avg_time = elapsed / iterations as f64;
+
+            log::info!("Omnipair average quoting speed: {}", avg_time);
+
+            assert!(
+                avg_time < 0.0001,
+                "Omnipair failed quoting speed test swapping ({}) -> ({})",
                 input_mint,
                 output_mint
             );

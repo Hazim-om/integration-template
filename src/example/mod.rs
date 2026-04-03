@@ -21,7 +21,13 @@ use crate::{
 };
 
 mod amm;
+mod omnipair;
 mod raydium;
+
+pub use omnipair::{
+    DerivedAccounts, OmnipairPair, OmnipairVenue, OMNIPAIR_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
+};
 
 pub const RAYDIUM_AMM_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");

@@ -1,3 +1,5 @@
+mod common;
+
 #[cfg(test)]
 mod test_construction {
     //! Integration test ensuring that a venue:
@@ -11,7 +13,9 @@ mod test_construction {
     //! passes this style of test, as it verifies the critical invariants that
     //! Titan relies on for routing.
 
-    use std::{env, str::FromStr};
+    use std::str::FromStr;
+
+    use crate::common::solana_rpc_url;
 
     use rstest::rstest;
     use solana_client::nonblocking::rpc_client::RpcClient;
@@ -19,7 +23,7 @@ mod test_construction {
     use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
     use titan_integration_template::trading_venue::{QuoteRequest, SwapType};
     use titan_integration_template::{
-        example::RaydiumAmmVenue,
+        example::{OmnipairVenue, RaydiumAmmVenue},
         trading_venue::{FromAccount, TradingVenue},
     };
 
@@ -55,9 +59,7 @@ mod test_construction {
         //
         let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
 
-        let rpc_url =
-            env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
-        let rpc = RpcClient::new(rpc_url);
+        let rpc = RpcClient::new(solana_rpc_url());
 
         //
         // Fetch the venue’s account and construct the venue
@@ -149,6 +151,82 @@ mod test_construction {
                 ub_result.expected_output > 0,
                 "Upper bound produced zero output"
             );
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[case("Cp2nGCWWfqkUmPR3pPKoR376Fti8wuYRFrSWJZq1a9SA")] // Omnipair pair
+    async fn test_omnipair_construction(#[case] pair_key: String) {
+        init_test_logger();
+
+        let pair_key = Pubkey::from_str(&pair_key).expect("Invalid test pubkey");
+        let rpc = RpcClient::new(solana_rpc_url());
+
+        let pair_account = rpc
+            .get_account(&pair_key)
+            .await
+            .expect("Failed to fetch Omnipair pair account");
+
+        let mut venue = OmnipairVenue::from_account(&pair_key, &pair_account)
+            .expect("Failed to construct OmnipairVenue from account");
+
+        let cache = RpcClientCache::new(rpc);
+        venue
+            .update_state(&cache)
+            .await
+            .expect("OmnipairVenue state update failed");
+
+        let token_info = venue.get_token_info();
+        log::info!("Omnipair token info: {:#?}", token_info);
+        assert_eq!(token_info.len(), 2);
+
+        for (input_idx, output_idx) in [(0, 1), (1, 0)] {
+            log::info!(
+                "Omnipair bounds for pair ({}, {})",
+                input_idx,
+                output_idx
+            );
+
+            let (lower_bound, upper_bound) =
+                assert_no_alloc(|| venue.bounds(input_idx, output_idx))
+                    .expect("Boundary search failed");
+
+            assert!(
+                lower_bound < upper_bound,
+                "Lower bound must be strictly less than upper bound"
+            );
+
+            let input_mint = token_info[input_idx as usize].pubkey;
+            let output_mint = token_info[output_idx as usize].pubkey;
+
+            let lb_result = assert_no_alloc(|| {
+                venue.quote(QuoteRequest {
+                    input_mint,
+                    output_mint,
+                    amount: lower_bound,
+                    swap_type: SwapType::ExactIn,
+                })
+            })
+            .expect("Lower-bound quote failed");
+
+            log::info!("Omnipair lower-bound quote: {:#?}", lb_result);
+            assert!(!lb_result.not_enough_liquidity);
+            assert!(lb_result.expected_output > 0);
+
+            let ub_result = assert_no_alloc(|| {
+                venue.quote(QuoteRequest {
+                    input_mint,
+                    output_mint,
+                    amount: upper_bound,
+                    swap_type: SwapType::ExactIn,
+                })
+            })
+            .expect("Upper-bound quote failed");
+
+            log::info!("Omnipair upper-bound quote: {:#?}", ub_result);
+            assert!(!ub_result.not_enough_liquidity);
+            assert!(ub_result.expected_output > 0);
         }
     }
 }

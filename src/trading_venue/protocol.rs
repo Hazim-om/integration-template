@@ -18,6 +18,7 @@ use std::fmt::Display;
 /// Protocols included here:
 /// - `YourPoolProtocol`: Example/custom protocol placeholder.
 /// - `RaydiumAMM`: Raydium’s constant-product AMM on Solana.
+/// - `Omnipair`: Omnipair spot AMM / money-market pairs on Solana.
 #[derive(Debug, Copy, Clone)]
 pub enum PoolProtocol {
     /// Example/custom protocol — integrators should rename or replace this
@@ -26,6 +27,8 @@ pub enum PoolProtocol {
 
     /// Raydium’s AMM (x*y=k) pools on Solana.
     RaydiumAMM,
+
+    Omnipair,
 }
 
 impl Display for PoolProtocol {
@@ -46,6 +49,7 @@ impl From<PoolProtocol> for String {
         match protocol {
             PoolProtocol::YourPoolProtocol => "YourPoolProtocol".to_string(),
             PoolProtocol::RaydiumAMM => "RaydiumAMM".to_string(),
+            PoolProtocol::Omnipair => "Omnipair".to_string(),
         }
     }
 }
